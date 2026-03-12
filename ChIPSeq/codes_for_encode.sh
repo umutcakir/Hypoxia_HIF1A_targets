@@ -176,7 +176,7 @@ for ((job_id = 0; job_id < num_jobs; job_id++)); do
         # Extract the filename without extension
         filename=$(basename "$file" .bed)
         # Run your R script with the current file (without extension) as an argument
-        echo "Rscript summit_server.R 'Repeats_hg38_reduced.bed' '$file' 'Enrichment_Scores/${filename}.csv'" >> "$script_file"
+        echo "Rscript enrichment.R 'Repeats_hg38_reduced.bed' '$file' 'Enrichment_Scores/${filename}.csv'" >> "$script_file"
     done
     echo "EOF" >> "$script_file"
 
