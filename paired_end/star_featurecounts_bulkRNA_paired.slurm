@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p soeding
 #SBATCH -N 1
-#SBATCH -n 96
+#SBATCH -n 60
 #SBATCH -t 2-00:00:00
 #SBATCH --mem=500G
 #SBATCH --job-name=STAR_bulkRNA_PE
@@ -18,7 +18,7 @@ source activate hg38_STAR_Salmon
 ############################
 # Variables
 ############################
-THREADS=90
+THREADS=60
 
 STAR_INDEX=/cbscratch/umut.cakir/HIF_targets/hg38_genome_index/STAR_hg38
 GTF=/cbscratch/umut.cakir/HIF_targets/hg38_genome_index/genes_plus_TE.sorted_hg38.gtf
@@ -61,19 +61,6 @@ echo "[INFO] STAR alignment completed"
 # STEP 2: featureCounts (paired-end, your rule enforced)
 ############################
 echo "[INFO] Running featureCounts (paired-end)"
-
-featureCounts \
-    -T ${THREADS} \
-    -p \
-    -s 0 \
-    -t exon \
-    -g gene_id \
-    -M \
-    --fraction \
-    --largestOverlap \
-    -a ${GTF} \
-    -o ${COUNTDIR}/gene_counts.txt \
-    ${OUTDIR}/*.bam
 
 featureCounts \
     -T ${THREADS} \
