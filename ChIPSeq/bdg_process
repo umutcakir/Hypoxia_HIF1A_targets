@@ -1,0 +1,88 @@
+#!/bin/bash
+#SBATCH -p soeding
+#SBATCH -N 1
+#SBATCH -n 96
+#SBATCH -t 14-00:00:00
+#SBATCH --mem=900G
+
+
+source activate macs2_env
+
+# ----------------------------------------
+# SETTINGS
+# ----------------------------------------
+
+CHROMSIZES="hg38.chrom.sizes"
+
+if [ ! -f "$CHROMSIZES" ]; then
+  echo "ERROR: Chromosome sizes file not found: $CHROMSIZES"
+  exit 1
+fi
+
+# ----------------------------------------
+# PROCESS ALL SAMPLES
+# ----------------------------------------
+
+for treat in *_treat_pileup.bdg
+do
+  base=${treat%_treat_pileup.bdg}
+
+  control=${base}_control_lambda.bdg
+
+  echo "----------------------------------------"
+  echo "Processing: $base"
+  echo "----------------------------------------"
+
+  if [ ! -f "$control" ]; then
+    echo "Skipping (missing control): $base"
+    continue
+  fi
+
+  # ----------------------------------------
+  # 1. FE (Fold Enrichment)
+  # ----------------------------------------
+  macs2 bdgcmp -t "$treat" -c "$control" -o "${base}_FE.bdg" -m FE
+
+  # ----------------------------------------
+  # 2. logFE (log2 Fold Enrichment)
+  # ----------------------------------------
+  macs2 bdgcmp -t "$treat" -c "$control" -o "${base}_logFE.bdg" -m logFE
+
+  # ----------------------------------------
+  # 3. Subtraction (ChIP - Input)
+  # ----------------------------------------
+  macs2 bdgcmp -t "$treat" -c "$control" -o "${base}_subtract.bdg" -m subtract
+
+  # ----------------------------------------
+  # Convert ALL to bigWig
+  # ----------------------------------------
+
+  for type in FE logFE subtract
+  do
+    bdg="${base}_${type}.bdg"
+    sorted="${base}_${type}_sorted.bdg"
+    bw="${base}_${type}.bw"
+
+    if [ ! -s "$bdg" ]; then
+      echo "Skipping $bdg (empty)"
+      continue
+    fi
+
+    # Sort
+    sort -k1,1 -k2,2n "$bdg" > "$sorted"
+
+    # Convert
+    bedGraphToBigWig "$sorted" "$CHROMSIZES" "$bw"
+
+    # Cleanup
+    rm "$sorted"
+  done
+
+  echo "Finished: $base"
+done
+
+echo "----------------------------------------"
+echo "ALL DONE ?"
+echo "----------------------------------------"
+
+
