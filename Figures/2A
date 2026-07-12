@@ -1,0 +1,385 @@
+############################################################
+# Load libraries
+############################################################
+
+library(GenomicRanges)
+library(rtracklayer)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(patchwork)
+
+quick_save <- function(plot, filename_stub, width=12, height=10, dpi=1200, figure_folder = "Figures/") {
+  #ggsave(paste0(figure_folder, filename_stub, '.pdf'), plot = plot,
+  #       width = width, height = height, units = 'in')
+  ggsave(paste0(figure_folder, filename_stub, '.png'), plot = plot,
+         width = width, height = height, units = 'in', dpi = dpi)
+}
+
+############################################################
+# Input files
+############################################################
+
+summit_bed <- "Our cell type/HIF1A_all_combined.bed"
+gene_gtf <- "hg38_index/gencode.v49.annotation.filtered.gtf/gencode.v49.annotation.filtered.gtf"
+te_gtf <- "hg38_index/hg38_RepeatMasker_main_chromosomes_real_TEs_including_short_TEs/hg38_RepeatMasker_main_chromosomes_real_TEs_including_short_TEs.gtf"
+
+
+############################################################
+# Import data
+############################################################
+
+summits <- unique(import(summit_bed))
+
+# Ensure summits are single bp
+summits <- resize(summits, width = 1, fix = "center")
+
+genes_gtf <- import(gene_gtf)
+tes_gtf <- import(te_gtf)
+
+############################################################
+# Extract annotations
+############################################################
+
+genes <- genes_gtf[genes_gtf$type == "gene"]
+tes <- tes_gtf
+
+############################################################
+# Keep standard chromosomes
+############################################################
+
+standard_chr <- paste0("chr", c(1:22, "X", "Y"))
+
+summits <- keepSeqlevels(summits, standard_chr, pruning.mode = "coarse")
+genes   <- keepSeqlevels(genes, standard_chr, pruning.mode = "coarse")
+tes     <- keepSeqlevels(tes, standard_chr, pruning.mode = "coarse")
+
+############################################################
+# ==========================================================
+# STEP 1 — GENE ANALYSIS (NO EXTENSION)
+# ==========================================================
+############################################################
+
+gene_hits <- findOverlaps(summits, genes)
+
+gene_catalog <- data.frame(
+  peak_chr = as.character(seqnames(summits)[queryHits(gene_hits)]),
+  peak_start = start(summits)[queryHits(gene_hits)],
+  gene_type = genes$gene_type[subjectHits(gene_hits)]
+)
+
+# remove duplicates
+gene_catalog_unique <- gene_catalog %>%
+  distinct(peak_chr, peak_start, gene_type, .keep_all = TRUE)
+
+############################################################
+# Prepare HIF1A peak data
+############################################################
+
+peak_data <- gene_catalog_unique %>%
+  mutate(gene_type_clean = str_replace_all(gene_type, "_", " ")) %>%
+  count(gene_type_clean) %>%
+  arrange(desc(n)) %>%
+  mutate(
+    percent = 100 * n / sum(n),
+    label = sprintf("%.1f%%", percent),
+    legend_label = paste0(
+      gene_type_clean, " (", n, ", ", sprintf("%.1f%%", percent), ")"
+    )
+  )
+
+peak_data$gene_type_clean <- factor(
+  peak_data$gene_type_clean,
+  levels = peak_data$gene_type_clean
+)
+
+############################################################
+# Genome background
+############################################################
+
+genome_data <- data.frame(gene_type = genes$gene_type) %>%
+  mutate(gene_type_clean = str_replace_all(gene_type, "_", " ")) %>%
+  count(gene_type_clean) %>%
+  arrange(desc(n)) %>%
+  mutate(
+    percent = 100 * n / sum(n),
+    label = sprintf("%.1f%%", percent),
+    legend_label = paste0(
+      gene_type_clean, " (", n, ", ", sprintf("%.1f%%", percent), ")"
+    )
+  )
+
+genome_data$gene_type_clean <- factor(
+  genome_data$gene_type_clean,
+  levels = genome_data$gene_type_clean
+)
+
+############################################################
+# Colors
+############################################################
+
+all_gene_types <- union(
+  peak_data$gene_type_clean,
+  genome_data$gene_type_clean
+)
+
+palette_colors <- c(
+  brewer.pal(9, "Set1"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(12, "Set3"),
+  brewer.pal(8, "Set2")
+)
+
+gene_type_colors <- setNames(
+  palette_colors[1:length(all_gene_types)],
+  all_gene_types
+)
+
+############################################################
+# Plot HIF1A donut
+############################################################
+
+p1 <- ggplot(peak_data, aes(x = 2, y = n, fill = gene_type_clean)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  xlim(0.5, 2.5) +
+  geom_text(
+    aes(label = ifelse(percent > 2, label, "")),
+    position = position_stack(vjust = 0.5),
+    size = 4
+  ) +
+  scale_fill_manual(
+    values = gene_type_colors,
+    breaks = peak_data$gene_type_clean,
+    labels = peak_data$legend_label
+  ) +
+  labs(fill = "Gene biotype", title = "HIF1A-bound genes") +
+  theme_void(base_size = 14)
+
+############################################################
+# Plot genome donut
+############################################################
+
+p2 <- ggplot(genome_data, aes(x = 2, y = n, fill = gene_type_clean)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  xlim(0.5, 2.5) +
+  geom_text(
+    aes(label = ifelse(percent > 2, label, "")),
+    position = position_stack(vjust = 0.5),
+    size = 4
+  ) +
+  scale_fill_manual(
+    values = gene_type_colors,
+    breaks = genome_data$gene_type_clean,
+    labels = genome_data$legend_label
+  ) +
+  labs(fill = "Gene biotype", title = "Genome gene biotypes") +
+  theme_void(base_size = 14)
+
+quick_save(p1, "Gene_distribution_HIF1A")
+quick_save(p2, "Gene_distribution_genome", width = 18)
+
+############################################################
+# ==========================================================
+# STEP 2 — TE ANALYSIS (NO EXTENSION)
+# ==========================================================
+############################################################
+
+te_hits <- findOverlaps(summits, tes)
+
+te_catalog <- data.frame(
+  peak_chr = as.character(seqnames(summits)[queryHits(te_hits)]),
+  peak_start = start(summits)[queryHits(te_hits)],
+  TE_family = tes$repFamily[subjectHits(te_hits)],
+  TE_class = tes$repClass[subjectHits(te_hits)],
+  TE_Name = tes$repName[subjectHits(te_hits)]
+)
+
+te_catalog <- te_catalog %>%
+  distinct(peak_chr, peak_start, TE_Name, .keep_all = TRUE)
+
+############################################################
+# TE plot
+############################################################
+ 
+te_plot_data <- te_catalog %>%
+  count(TE_Name) %>%
+  arrange(desc(n)) %>%
+  slice_head(n = 15) %>%
+  mutate(
+    percent = 100 * n / sum(n),
+    label = paste0(n, " (", sprintf("%.1f%%", percent), ")")
+  )
+
+te_plot <- ggplot(te_plot_data, aes(x = reorder(TE_Name, n), y = n)) +
+  geom_col(fill = "#2C7FB8", width = 0.7) +
+  coord_flip() +
+  
+  geom_text(
+    aes(label = label),
+    hjust = -0.1,
+    size = 4
+  ) +
+  
+  labs(
+    title = "Top TE loci bound by HIF1A",
+    x = NULL,
+    y = "Number of peaks"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.line = element_line(color = "black")
+  ) +
+  
+  expand_limits(y = max(te_plot_data$n) * 1.15)
+
+te_plot
+
+quick_save(te_plot, "TE_family_enrichment")
+
+
+
+
+# Extract TE names from full annotation (genome-wide)
+te_counts_genome <- as.data.frame(mcols(tes)) %>%
+  dplyr::select(TE_Name = repName) %>%
+  count(TE_Name) %>%
+  arrange(desc(n))
+
+total_genome_te <- sum(te_counts_genome$n)
+
+# Top 15 for visualization
+te_top15_genome <- te_counts_genome %>%
+  slice_head(n = 15) %>%
+  mutate(
+    percent = 100 * n / total_genome_te,
+    label = paste0(n, " (", sprintf("%.1f%%", percent), ")")
+  )
+
+
+te_plot_genome <- ggplot(te_top15_genome, aes(x = reorder(TE_Name, n), y = n)) +
+  geom_col(fill = "#7FCDBB", width = 0.7) +
+  coord_flip() +
+  
+  geom_text(
+    aes(label = label),
+    hjust = -0.1,
+    size = 4
+  ) +
+  
+  labs(
+    title = "Top TE loci in genome",
+    x = NULL,
+    y = "Number of TE loci"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.line = element_line(color = "black")
+  ) +
+  
+  expand_limits(y = max(te_top15_genome$n) * 1.15)
+
+te_plot_genome
+
+quick_save(te_plot_genome, filename_stub = "te_plot_genome")
+
+############################################################
+# ==========================================================
+# STEP 3 — PROMOTER ANALYSIS (±1kb only here)
+# ==========================================================
+############################################################
+
+promoters_gr <- promoters(genes, upstream = 1000, downstream = 1000)
+
+promoter_hits <- findOverlaps(summits, promoters_gr)
+
+gene_hits <- findOverlaps(summits, genes)
+te_hits <- findOverlaps(summits, tes)
+
+n <- length(summits)
+
+gene_overlap <- rep(FALSE, n)
+gene_overlap[unique(queryHits(gene_hits))] <- TRUE
+
+promoter_overlap <- rep(FALSE, n)
+promoter_overlap[unique(queryHits(promoter_hits))] <- TRUE
+
+te_overlap <- rep(FALSE, n)
+te_overlap[unique(queryHits(te_hits))] <- TRUE
+
+combined_catalog <- data.frame(
+  peak_chr = as.character(seqnames(summits)),
+  peak_start = start(summits),
+  promoter_overlap = promoter_overlap,
+  gene_overlap = gene_overlap,
+  TE_overlap = te_overlap
+)
+
+############################################################
+# Classification
+############################################################
+
+combined_catalog$peak_type <- "Intergenic"
+
+combined_catalog$peak_type[promoter_overlap] <- "Promoter"
+combined_catalog$peak_type[!promoter_overlap & gene_overlap] <- "Gene body"
+combined_catalog$peak_type[!gene_overlap & te_overlap] <- "TE only"
+combined_catalog$peak_type[gene_overlap & te_overlap] <- "Gene & TE"
+
+############################################################
+# Peak type plot
+############################################################
+
+peak_plot <- combined_catalog %>%
+  count(peak_type) %>%
+  arrange(desc(n)) %>%
+  mutate(peak_type = factor(peak_type, levels = peak_type)) %>%
+  
+  ggplot(aes(x = peak_type, y = n, fill = peak_type)) +
+  geom_col(width = 0.7) +
+  coord_flip() +
+  
+  geom_text(
+    aes(label = n),
+    hjust = -0.1,
+    size = 4
+  ) +
+  
+  labs(
+    title = "Peak annotation distribution",
+    x = NULL,
+    y = "Number of peaks"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "none"
+  ) +
+  
+  expand_limits(y = max(table(combined_catalog$peak_type)) * 1.15)
+
+peak_plot
+
+quick_save(peak_plot, "Peak_type_distribution")
+
+############################################################
+# Export
+############################################################
+
+write.csv(combined_catalog, "HIF1A_peak_combined_catalog.csv", row.names = FALSE)
+
+############################################################
